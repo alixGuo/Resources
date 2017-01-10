@@ -1,0 +1,87 @@
+diff --git a/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala b/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala
+index 2c7d9d6..9b217be 100644
+--- a/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala
++++ b/yarn/src/main/scala/org/apache/spark/deploy/yarn/Client.scala
+@@ -367,7 +367,9 @@ private[spark] class Client(
+       destPath = new Path(destDir, destName.getOrElse(srcPath.getName()))
+       logInfo(s"Uploading resource $srcPath -> $destPath")
+       FileUtil.copy(srcFs, srcPath, destFs, destPath, false, hadoopConf)
+-      destFs.setReplication(destPath, replication)
++      if (!replication.equals(destFs.getDefaultReplication(destDir))) {
++        destFs.setReplication(destPath, replication)
++      }
+       destFs.setPermission(destPath, new FsPermission(APP_FILE_PERMISSION))
+     } else {
+       logInfo(s"Source and destination file systems are the same. Not copying $srcPath")
+@@ -425,9 +427,34 @@ private[spark] class Client(
+     // same name but different path files are added multiple time, YARN will fail to launch
+     // containers for the app with an internal error.
+     val distributedNames = new HashSet[String]
++    val defaultReplication = fs.getDefaultReplication(destDir)
++    val replication = sparkConf.get(STAGING_FILE_REPLICATION).map(_.toShort).getOrElse {
++      val localFilesSize = List(
++        sparkConf.get(JARS_TO_DISTRIBUTE),
++        sparkConf.get(FILES_TO_DISTRIBUTE),
++        sparkConf.get(ARCHIVES_TO_DISTRIBUTE),
++        Option(args.userJar).filter(_.trim.nonEmpty).toSeq
++      ).flatMap(_.seq)
++        .filter(fpath => new URI(fpath).getScheme.equals(LOCAL_FILE_SCHEME))
++        .filter(fpath => new URI(fpath).getSchemeSpecificPart.nonEmpty)
++        .map { filePath =>
++          Utils.getFileLength(new File(new URI(filePath).getSchemeSpecificPart), sparkConf)
++      }.sum
++
++      val dataNodeMaxNIO = sparkConf.get(STAGING_FILE_REPLICATION_DATANODE_MAXNIO)
++      val calculateReplication = localFilesSize / (1024 * 1024) *
++        sparkConf.get(EXECUTOR_INSTANCES).get / dataNodeMaxNIO
++
++      val rep = if (calculateReplication < defaultReplication) {
++        defaultReplication
++      } else if (calculateReplication > MAX_HDFS_REPLICATION) {
++        MAX_HDFS_REPLICATION
++      } else {
++        calculateReplication
++      }
++      rep.toShort
++    }
+ 
+-    val replication = sparkConf.get(STAGING_FILE_REPLICATION).map(_.toShort)
+-      .getOrElse(fs.getDefaultReplication(destDir))
+     val localResources = HashMap[String, LocalResource]()
+     FileSystem.mkdirs(fs, destDir, new FsPermission(STAGING_DIR_PERMISSION))
+ 
+@@ -1218,6 +1245,7 @@ private object Client extends Logging {
+ 
+   // URI scheme that identifies local resources
+   val LOCAL_SCHEME = "local"
++  val LOCAL_FILE_SCHEME = "file"
+ 
+   // Staging directory for any temporary jars or files
+   val SPARK_STAGING: String = ".sparkStaging"
+@@ -1249,6 +1277,9 @@ private object Client extends Logging {
+   // Subdirectory where Spark libraries will be placed.
+   val LOCALIZED_LIB_DIR = "__spark_libs__"
+ 
++  // Max replication of distribute files, include --jars, --files and userJars
++  val MAX_HDFS_REPLICATION = 30
++
+   /**
+    * Return the path to the given application's staging directory.
+    */
+diff --git a/yarn/src/main/scala/org/apache/spark/deploy/yarn/config.scala b/yarn/src/main/scala/org/apache/spark/deploy/yarn/config.scala
+index ca8c890..01d64d8 100644
+--- a/yarn/src/main/scala/org/apache/spark/deploy/yarn/config.scala
++++ b/yarn/src/main/scala/org/apache/spark/deploy/yarn/config.scala
+@@ -115,6 +115,12 @@ package object config {
+     .intConf
+     .createOptional
+ 
++  private[spark] val STAGING_FILE_REPLICATION_DATANODE_MAXNIO =
++    ConfigBuilder("spark.yarn.submit.file.datanode-maxnio")
++    .doc("Max network io for each datanode when yarn node pull files from HDFS.")
++    .intConf
++    .createWithDefault(100)
++
+   private[spark] val STAGING_DIR = ConfigBuilder("spark.yarn.stagingDir")
+     .doc("Staging directory used while submitting applications.")
+     .stringConf
