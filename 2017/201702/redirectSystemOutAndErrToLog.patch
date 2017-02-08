@@ -1,0 +1,167 @@
+From 00b0389357090fa84115d191e1147ff895e8f6d7 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=E9=83=AD=E6=96=B0=E9=9B=B7?= <16081358@cnsuning.com>
+Date: Tue, 7 Feb 2017 15:17:58 +0800
+Subject: [PATCH] =?UTF-8?q?=E4=B8=9A=E5=8A=A1print=E4=BF=A1=E6=81=AF?=
+ =?UTF-8?q?=E9=87=8D=E5=AE=9A=E5=90=91=E8=87=B3log4j=E6=97=A5=E5=BF=97?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: 郭新雷 <16081358@cnsuning.com>
+---
+ .../executor/CoarseGrainedExecutorBackend.scala    |   2 +
+ .../spark/util/logging/Log4jPrintStream.scala      | 101 +++++++++++++++++++++
+ .../spark/deploy/yarn/ApplicationMaster.scala      |   2 +
+ 3 files changed, 105 insertions(+)
+ create mode 100644 core/src/main/scala/org/apache/spark/util/logging/Log4jPrintStream.scala
+
+diff --git a/core/src/main/scala/org/apache/spark/executor/CoarseGrainedExecutorBackend.scala b/core/src/main/scala/org/apache/spark/executor/CoarseGrainedExecutorBackend.scala
+index 92a2790..fd863de 100644
+--- a/core/src/main/scala/org/apache/spark/executor/CoarseGrainedExecutorBackend.scala
++++ b/core/src/main/scala/org/apache/spark/executor/CoarseGrainedExecutorBackend.scala
+@@ -35,6 +35,7 @@ import org.apache.spark.scheduler.{ExecutorLossReason, TaskDescription}
+ import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
+ import org.apache.spark.serializer.SerializerInstance
+ import org.apache.spark.util.{ThreadUtils, Utils}
++import org.apache.spark.util.logging.Log4jPrintStream
+ 
+ private[spark] class CoarseGrainedExecutorBackend(
+     override val rpcEnv: RpcEnv,
+@@ -183,6 +184,7 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
+       workerUrl: Option[String],
+       userClassPath: Seq[URL]) {
+ 
++    Log4jPrintStream.redirectSystemOutAndErrToLog()
+     Utils.initDaemon(log)
+ 
+     SparkHadoopUtil.get.runAsSparkUser { () =>
+diff --git a/core/src/main/scala/org/apache/spark/util/logging/Log4jPrintStream.scala b/core/src/main/scala/org/apache/spark/util/logging/Log4jPrintStream.scala
+new file mode 100644
+index 0000000..8e31bd5
+--- /dev/null
++++ b/core/src/main/scala/org/apache/spark/util/logging/Log4jPrintStream.scala
+@@ -0,0 +1,101 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *    http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.spark.util.logging
++import java.io.PrintStream
++import org.apache.spark.internal.Logging
++
++/**
++  * Redirect print and println to log4j log file
++  */
++
++object Log4jPrintStream extends Logging{
++  def redirectSystemOutAndErrToLog(): Unit = {
++    val printStreamForOut: PrintStream = createLoggingWrapper(System.out)
++    System.setOut(printStreamForOut)
++    val printStreamForErr: PrintStream = createLoggingWrapper(System.err)
++    System.setErr(printStreamForErr)
++  }
++
++  def createLoggingWrapper(printStream: PrintStream): PrintStream = {
++    return new PrintStream(printStream) {
++      override def print(string: String): Unit = {
++        logInfo(string)
++      }
++
++      override def print(int: Int): Unit = {
++        logInfo(int.toString)
++      }
++
++      override def print(long: Long): Unit = {
++        logInfo(long.toString)
++      }
++
++      override def print(double: Double): Unit = {
++        logInfo(double.toString)
++      }
++
++      override def print(float: Float): Unit = {
++        logInfo(float.toString)
++      }
++
++      override def print(boolean: Boolean): Unit = {
++        logInfo(boolean2Boolean(boolean).toString)
++      }
++
++      override def print(obj: Object): Unit = {
++        logInfo(obj.toString)
++      }
++
++      // scalastyle:off println
++      override def println(): Unit = {
++        logInfo("\n")
++      }
++
++
++      override def println(string: String): Unit = {
++        logInfo(string)
++      }
++
++      override def println(int: Int): Unit = {
++        logInfo(int.toString)
++      }
++
++      override def println(long: Long): Unit = {
++        logInfo(long.toString)
++      }
++
++      override def println(double: Double): Unit = {
++        logInfo(double.toString)
++      }
++
++      override def println(float: Float): Unit = {
++        logInfo(float.toString)
++      }
++
++      override def println(boolean: Boolean): Unit = {
++        logInfo(boolean2Boolean(boolean).toString)
++      }
++
++      override def println(obj: Object): Unit = {
++        logInfo(obj.toString)
++      }
++      // scalastyle:on println
++
++    }
++  }
++}
+diff --git a/yarn/src/main/scala/org/apache/spark/deploy/yarn/ApplicationMaster.scala b/yarn/src/main/scala/org/apache/spark/deploy/yarn/ApplicationMaster.scala
+index aabae14..411026b 100644
+--- a/yarn/src/main/scala/org/apache/spark/deploy/yarn/ApplicationMaster.scala
++++ b/yarn/src/main/scala/org/apache/spark/deploy/yarn/ApplicationMaster.scala
+@@ -44,6 +44,7 @@ import org.apache.spark.rpc._
+ import org.apache.spark.scheduler.cluster.{CoarseGrainedSchedulerBackend, YarnSchedulerBackend}
+ import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
+ import org.apache.spark.util._
++import org.apache.spark.util.logging.Log4jPrintStream
+ 
+ /**
+  * Common application master functionality for Spark on Yarn.
+@@ -750,6 +751,7 @@ object ApplicationMaster extends Logging {
+   private var master: ApplicationMaster = _
+ 
+   def main(args: Array[String]): Unit = {
++    Log4jPrintStream.redirectSystemOutAndErrToLog()
+     SignalUtils.registerLogger(log)
+     val amArgs = new ApplicationMasterArguments(args)
+ 
+-- 
+2.9.3.windows.2
+
